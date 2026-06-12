@@ -585,10 +585,31 @@ onUnmounted(() => {
     flex-direction: column;
     gap: 20px;
     text-align: center;
+    padding: 20px 18px;
   }
 
   .status-hero__right {
-    gap: 20px;
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .queue-number {
+    font-size: 2rem;
+  }
+
+  .action-row {
+    flex-direction: column;
+  }
+
+  .action-row :deep(.btn) {
+    width: 100%;
+  }
+
+  .charging-meta {
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
   }
 }
 </style>

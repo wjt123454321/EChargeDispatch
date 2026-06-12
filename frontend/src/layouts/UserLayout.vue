@@ -27,7 +27,7 @@ function handleLogout() {
           </svg>
           <span>ECharge</span>
         </router-link>
-        <nav class="header__nav">
+        <nav class="header__nav header__nav--desktop">
           <router-link
             v-for="item in navItems"
             :key="item.path"
@@ -42,9 +42,10 @@ function handleLogout() {
       </div>
       <div class="header__right">
         <span class="user-badge">{{ displayName }}</span>
-        <button class="logout-btn" @click="handleLogout">退出</button>
+        <button class="logout-btn" type="button" @click="handleLogout">退出</button>
       </div>
     </header>
+
     <main class="main">
       <router-view v-slot="{ Component }">
         <Transition name="page" mode="out-in">
@@ -52,12 +53,26 @@ function handleLogout() {
         </Transition>
       </router-view>
     </main>
+
+    <nav class="bottom-nav" aria-label="主导航">
+      <router-link
+        v-for="item in navItems"
+        :key="item.path"
+        :to="item.path"
+        class="bottom-nav__item"
+        active-class="bottom-nav__item--active"
+      >
+        <span class="bottom-nav__icon">{{ item.icon }}</span>
+        <span class="bottom-nav__label">{{ item.label }}</span>
+      </router-link>
+    </nav>
   </div>
 </template>
 
 <style scoped>
 .app-layout {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -69,7 +84,8 @@ function handleLogout() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 28px;
+  padding: 0 16px;
+  padding-top: env(safe-area-inset-top, 0px);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -79,70 +95,55 @@ function handleLogout() {
   display: flex;
   align-items: center;
   gap: 32px;
+  min-width: 0;
 }
 
 .header__logo {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-weight: 800;
-  font-size: 1.0625rem;
+  font-size: 1rem;
   color: var(--color-text);
   text-decoration: none;
+  flex-shrink: 0;
 }
 
-.header__nav {
-  display: flex;
-  gap: 4px;
+.header__logo span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.nav-link {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  border-radius: var(--radius-md);
-  text-decoration: none;
-  transition: all var(--transition-fast);
-}
-
-.nav-link:hover {
-  color: var(--color-text);
-  background: var(--color-surface-muted);
-}
-
-.nav-link--active {
-  color: var(--color-primary);
-  background: var(--color-primary-muted);
-}
-
-.nav-link__icon {
-  font-size: 0.9375rem;
+.header__nav--desktop {
+  display: none;
 }
 
 .header__right {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .user-badge {
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  padding: 6px 14px;
+  padding: 5px 10px;
   background: var(--color-surface-muted);
   border-radius: 100px;
   color: var(--color-text-secondary);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .logout-btn {
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--color-text-muted);
-  padding: 6px 12px;
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
 }
@@ -154,11 +155,100 @@ function handleLogout() {
 
 .main {
   flex: 1;
+  min-width: 0;
 }
 
-@media (max-width: 640px) {
-  .header__nav {
+.bottom-nav {
+  display: flex;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+  height: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--color-bg-elevated);
+  border-top: 1px solid var(--color-border-light);
+  box-shadow: 0 -2px 12px rgba(28, 27, 25, 0.06);
+}
+
+.bottom-nav__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  text-decoration: none;
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  transition: color var(--transition-fast);
+}
+
+.bottom-nav__item--active {
+  color: var(--color-primary);
+}
+
+.bottom-nav__icon {
+  font-size: 1.125rem;
+  line-height: 1;
+}
+
+.bottom-nav__label {
+  line-height: 1.2;
+}
+
+@media (min-width: 769px) {
+  .header {
+    padding: 0 28px;
+  }
+
+  .header__logo {
+    font-size: 1.0625rem;
+    gap: 10px;
+  }
+
+  .user-badge {
+    font-size: 0.8125rem;
+    padding: 6px 14px;
+    max-width: none;
+  }
+
+  .bottom-nav {
     display: none;
+  }
+
+  .header__nav--desktop {
+    display: flex;
+    gap: 4px;
+  }
+
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    transition: all var(--transition-fast);
+  }
+
+  .nav-link:hover {
+    color: var(--color-text);
+    background: var(--color-surface-muted);
+  }
+
+  .nav-link--active {
+    color: var(--color-primary);
+    background: var(--color-primary-muted);
+  }
+
+  .main :deep(.page) {
+    padding-bottom: 32px;
   }
 }
 </style>

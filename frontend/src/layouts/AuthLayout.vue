@@ -148,5 +148,15 @@
   .auth-layout__brand {
     display: none;
   }
+
+  .auth-layout__form {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 24px 20px;
+    padding-top: calc(24px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    align-items: flex-start;
+    padding-top: max(48px, calc(24px + env(safe-area-inset-top, 0px)));
+  }
 }
 </style>

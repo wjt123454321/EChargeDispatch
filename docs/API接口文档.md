@@ -75,7 +75,7 @@ Authorization: Bearer <access_token>
 | 3001 | 已有未完成充电请求 |
 | 3002 | 请求不存在 |
 | 3003 | 当前状态不允许操作 |
-| 3005 | 等候区已满 |
+| 3005 | 等候区已满（枚举预留；`POST /api/charging/request` 实际返回 `accepted: false`，不返回此错误码） |
 | 4001 | 充电桩不存在 |
 | 4002 | 充电桩状态不允许操作 |
 | 4003 | 充电桩无空位 |
@@ -284,6 +284,7 @@ Authorization: Bearer <user-token>
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | accepted | boolean | 是否受理；`false` 表示等候区已满且同模式桩无空位 |
+| reason | string | `accepted=false` 时固定为 `waiting_area_full` |
 | message | string | `accepted=false` 时的说明，如「等候区已无空位」 |
 | request_id | int | 请求 ID（仅 `accepted=true` 时返回） |
 | request_no | string | 请求编号 |
@@ -313,6 +314,7 @@ Authorization: Bearer <user-token>
   "code": 0,
   "message": "success",
   "data": {
+    "accepted": true,
     "request_id": 1,
     "request_no": "REQA1B2C3D4E5F6",
     "queue_num": "F1",
@@ -331,10 +333,24 @@ Authorization: Bearer <user-token>
 }
 ```
 
+**响应示例**（等候区已满且无法派桩）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "accepted": false,
+    "reason": "waiting_area_full",
+    "message": "等候区已无空位"
+  }
+}
+```
+
 **业务规则**：
 - 同一车辆同时只能有一个未完成请求
 - 有空位时系统自动调度，状态可能直接变为 `dispatched`
-- 等候区满返回 `3005`
+- 等候区满且同模式桩无空位时返回 `accepted: false`（HTTP 仍为 200，`code` 仍为 0），不抛出 `3005` 错误
 
 ---
 
@@ -361,7 +377,7 @@ Authorization: Bearer <user-token>
 }
 ```
 
-**成功响应**：与 [3.1 提交充电请求](#31-提交充电请求) 的 `data` 结构相同。
+**成功响应**：与 [3.1 提交充电请求](#31-提交充电请求) 的 `data` 结构相同（不含 `accepted` 字段）。
 
 **常见错误**：`3003` 已进入充电区或正在充电
 
@@ -390,7 +406,7 @@ Authorization: Bearer <user-token>
 }
 ```
 
-**成功响应**：与 [3.1](#31-提交充电请求) 相同，`queue_num` 会更新。
+**成功响应**：与 [3.1](#31-提交充电请求) 相同（不含 `accepted` 字段），`queue_num` 会更新。
 
 ---
 
@@ -596,25 +612,39 @@ Authorization: Bearer <user-token>
 ```
 
 **说明**：
-- 等候区、充电区排队中均可取消
+- 等候区、充电区排队、故障待重调度（`pending_reschedule`）均可取消
 - 正在充电时取消，按已充电量生成详单和账单
 
 **无请求体**
 
-**成功响应 `data`**：
+**成功响应 `data`（排队中取消）**：
 
 ```json
 {
-  "code": 0,
-  "message": "success",
-  "data": {
-    "request_id": 1,
-    "status": "cancelled"
-  }
+  "request_id": 1,
+  "status": "cancelled"
 }
 ```
 
-正在充电时取消，额外包含 `charged_amount`、`bill_id`、`detail_id`。
+**成功响应 `data`（充电中取消）**：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| request_id | int | 请求 ID |
+| status | string | 响应中为 `completed`（`_finalize_session` 返回值）；数据库中请求状态为 `cancelled` |
+| charged_amount | number | 实际充电量 |
+| bill_id | int | 生成的账单 ID |
+| detail_id | int | 生成的详单 ID |
+
+```json
+{
+  "request_id": 1,
+  "status": "completed",
+  "charged_amount": 2.5,
+  "bill_id": 1,
+  "detail_id": 1
+}
+```
 
 ---
 
@@ -749,6 +779,14 @@ Authorization: Bearer <user-token>
 
 **成功响应 `data`**：
 
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| bill_id | int | 账单 ID |
+| pay_status | string | 支付状态 |
+| paid_at | string | 支付时间 ISO8601（仅首次支付成功时返回） |
+
+**响应示例**（首次支付）：
+
 ```json
 {
   "code": 0,
@@ -757,6 +795,19 @@ Authorization: Bearer <user-token>
     "bill_id": 1,
     "pay_status": "paid",
     "paid_at": "2026-06-12T14:42:00+08:00"
+  }
+}
+```
+
+**响应示例**（已支付，重复调用）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "bill_id": 1,
+    "pay_status": "paid"
   }
 }
 ```
@@ -899,8 +950,10 @@ Authorization: Bearer <admin-token>
 | pile_id | int | 充电桩 ID |
 | pile_no | string | 桩编号 |
 | status | string | 桩状态 |
-| queue | array | 排队车辆列表 |
-| charging_car | object / null | 正在充电的车辆 |
+| queue_used | int | 当前队列占用数（含在充、排队、待重调度） |
+| queue_total | int | 队列容量（等于 `charging_queue_len`） |
+| queue | array | 队列明细，按顺位排列（含正在充电的车辆） |
+| charging_car | object / null | 正在充电车辆摘要（与 `queue` 队首重复，便于展示） |
 
 **`queue[]` 元素**：
 
@@ -912,8 +965,10 @@ Authorization: Bearer <admin-token>
 | battery_capacity | number | 电池容量 |
 | request_amount | number | 请求充电量 |
 | queue_num | string | 排队号 |
-| waiting_seconds | int | 排队等待秒数 |
-| status | string | 请求状态 |
+| waiting_seconds | int | 等待秒数（在充时为已充时长） |
+| status | string | `charging` / `dispatched` / `pending_reschedule` |
+| position | int | 队列顺位（从 1 起） |
+| charged_amount | number | 可选；`status=charging` 时返回当前已充电量 |
 
 **响应示例**：
 
@@ -925,7 +980,21 @@ Authorization: Bearer <admin-token>
     "pile_id": 1,
     "pile_no": "F1",
     "status": "charging",
+    "queue_used": 2,
+    "queue_total": 3,
     "queue": [
+      {
+        "request_id": 1,
+        "car_id": "V001",
+        "user_id": 1,
+        "battery_capacity": 60.0,
+        "request_amount": 20.0,
+        "queue_num": "F1",
+        "waiting_seconds": 300,
+        "status": "charging",
+        "position": 1,
+        "charged_amount": 3.5
+      },
       {
         "request_id": 2,
         "car_id": "V002",
@@ -934,7 +1003,8 @@ Authorization: Bearer <admin-token>
         "request_amount": 15.0,
         "queue_num": "F2",
         "waiting_seconds": 120,
-        "status": "dispatched"
+        "status": "dispatched",
+        "position": 2
       }
     ],
     "charging_car": {
@@ -1025,8 +1095,9 @@ Authorization: Bearer <admin-token>
 ```
 
 **说明**：
-- 正在充电的车辆立即停止并按已充电量生成详单
-- 该桩排队车辆进入 `pending_reschedule` 并重调度
+- 暂停等候区叫号（`waiting_dispatch_paused = true`）
+- 正在充电的车辆立即停止并按已充电量生成详单，请求进入 `pending_reschedule` 并留在故障桩
+- 该桩 `dispatched` 排队车辆进入 `pending_reschedule`，优先重调度至其它同类型桩；无空位则留在故障桩队列
 
 ---
 
@@ -1047,6 +1118,11 @@ Authorization: Bearer <admin-token>
 
 **成功响应 `data`**：
 
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| pile_id | int | 充电桩 ID |
+| status | string | 恢复后桩状态：`available`（已投入运行）或 `standby`（未投入运行） |
+
 ```json
 {
   "code": 0,
@@ -1057,6 +1133,8 @@ Authorization: Bearer <admin-token>
   }
 }
 ```
+
+恢复后若同类型桩有待合并队列，会按排队号整体重调度，并恢复等候区叫号。
 
 ---
 
@@ -1144,6 +1222,7 @@ Authorization: Bearer <admin-token>
 
 | 字段 | 说明 |
 | --- | --- |
+| case_time | 请求参数中的填表时刻标签；未传时为当前模拟时间的 `HH:MM` |
 | sim_time | 当前模拟时间 ISO8601 |
 | sim_active | 模拟时钟是否开启 |
 | queue_rows | 每个时刻子表行数（等于 `charging_queue_len`，验收默认 3） |
@@ -1151,6 +1230,15 @@ Authorization: Bearer <admin-token>
 | waiting_area | 等候区占用与车辆列表 |
 | table_rows | 填表子表（3 行），与作业用例 xlsx 一致 |
 | table_row | 兼容字段，等同 `table_rows[0]` |
+
+**`waiting_area` 对象**：
+
+| 字段 | 说明 |
+| --- | --- |
+| display | 填表用字符串，多车用 `-` 连接 |
+| used | 当前等候区占用数 |
+| capacity | 等候区容量 |
+| items | 等候区车辆明细数组 |
 
 **`piles[桩编号]`**：
 

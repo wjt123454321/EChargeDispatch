@@ -131,4 +131,30 @@ onMounted(fetchBills)
   font-size: 0.75rem;
   color: var(--color-text-muted);
 }
+
+@media (max-width: 640px) {
+  .bill-item {
+    padding: 14px 16px;
+    gap: 8px 12px;
+  }
+
+  .bill-item__left {
+    grid-column: 1 / -1;
+  }
+
+  .bill-item__date {
+    display: block;
+    margin-left: 0;
+    margin-top: 2px;
+  }
+
+  .bill-item__right {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+
+  .bill-item:hover {
+    transform: none;
+  }
+}
 </style>

@@ -246,12 +246,31 @@ onMounted(fetchReport)
 }
 
 @media (max-width: 768px) {
+  .report-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .report-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .report-filters :deep(.btn) {
+    width: 100%;
+  }
+
   .totals-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 
   .report-table-wrap {
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .report-table {
+    min-width: 640px;
   }
 }
 </style>

@@ -108,4 +108,27 @@ const emit = defineEmits(['close'])
 .modal-leave-to .modal {
   transform: scale(0.95) translateY(10px);
 }
+
+@media (max-width: 640px) {
+  .modal-overlay {
+    padding: 12px;
+    align-items: flex-end;
+  }
+
+  .modal {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    max-height: 90vh;
+    max-height: 90dvh;
+    overflow-y: auto;
+  }
+
+  .modal__footer {
+    flex-direction: column-reverse;
+  }
+
+  .modal__footer :deep(.btn) {
+    width: 100%;
+  }
+}
 </style>

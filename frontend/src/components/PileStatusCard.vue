@@ -75,6 +75,16 @@ const emit = defineEmits(['click'])
   transform: translateY(-2px);
 }
 
+@media (hover: none) {
+  .pile-card:hover {
+    transform: none;
+  }
+
+  .pile-card:active {
+    transform: scale(0.99);
+  }
+}
+
 .pile-card--selected {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-primary-muted);

@@ -266,12 +266,24 @@ onMounted(fetchDetail)
 }
 
 @media (max-width: 768px) {
+  .bill-summary {
+    padding: 20px 18px;
+  }
+
+  .summary-total__value {
+    font-size: 1.625rem;
+  }
+
   .summary-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 
   .detail-row__grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .bill-summary :deep(.btn) {
+    width: 100%;
   }
 }
 </style>

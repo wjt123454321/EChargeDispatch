@@ -132,5 +132,17 @@ onMounted(fetchFaults)
   gap: 20px;
   font-size: 0.75rem;
   color: var(--color-text-muted);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .fault-card__content {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .fault-card__content :deep(.btn) {
+    width: 100%;
+  }
 }
 </style>

@@ -48,4 +48,20 @@ const emit = defineEmits(['update:modelValue'])
   color: var(--color-primary);
   box-shadow: var(--shadow-sm);
 }
+
+@media (max-width: 640px) {
+  .tabs {
+    display: flex;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tabs__item {
+    flex: 1;
+    min-width: max-content;
+    padding: 8px 14px;
+    white-space: nowrap;
+  }
+}
 </style>

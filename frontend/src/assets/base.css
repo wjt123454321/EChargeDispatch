@@ -16,10 +16,13 @@ html {
 
 body {
   min-height: 100vh;
+  min-height: 100dvh;
   line-height: 1.6;
   font-family: var(--font-sans);
   color: var(--color-text);
   background: var(--color-bg);
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
 }
 
 a {
@@ -44,6 +47,14 @@ select,
 textarea {
   font-family: inherit;
   font-size: inherit;
+}
+
+@media (max-width: 768px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 img {

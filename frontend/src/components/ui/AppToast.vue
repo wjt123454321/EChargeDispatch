@@ -64,4 +64,17 @@ const { toasts, dismiss } = useToast()
   opacity: 0;
   transform: translateX(40px);
 }
+
+@media (max-width: 640px) {
+  .toast-container {
+    left: 12px;
+    right: 12px;
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    align-items: stretch;
+  }
+
+  .toast {
+    max-width: none;
+  }
+}
 </style>

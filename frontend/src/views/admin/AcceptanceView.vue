@@ -275,8 +275,26 @@ code {
 }
 
 @media (max-width: 768px) {
+  .hint-list {
+    margin-left: 16px;
+    font-size: 0.8125rem;
+  }
+
+  .hint-list code {
+    word-break: break-all;
+  }
+
+  .accept-table {
+    min-width: 720px;
+    font-size: 0.75rem;
+  }
+
+  .table-wrap {
+    -webkit-overflow-scrolling: touch;
+  }
+
   .pile-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: 1fr;
   }
 }
 </style>

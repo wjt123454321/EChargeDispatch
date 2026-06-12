@@ -46,4 +46,6 @@
 
   --header-height: 60px;
   --sidebar-width: 220px;
+  --bottom-nav-height: 56px;
+  --mobile-breakpoint: 768px;
 }
