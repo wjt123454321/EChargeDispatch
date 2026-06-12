@@ -14,6 +14,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'corsheaders',
+    'apps.common',
+    'apps.accounts',
+    'apps.station',
+    'apps.charging',
+    'apps.billing',
+    'apps.operations',
 ]
 
 MIDDLEWARE = [
@@ -79,3 +85,6 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+JWT_SECRET_KEY = SECRET_KEY
+JWT_EXPIRE_SECONDS = 7200

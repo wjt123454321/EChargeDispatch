@@ -1,0 +1,49 @@
+:root {
+  /* 暖色基底 — 避免冷色渐变 AI 感 */
+  --color-bg: #f6f4f0;
+  --color-bg-elevated: #ffffff;
+  --color-surface-muted: #ece9e3;
+  --color-border: #ddd9d2;
+  --color-border-light: #ebe8e2;
+
+  --color-text: #1c1b19;
+  --color-text-secondary: #5c5850;
+  --color-text-muted: #8a857c;
+
+  /* 主色：深松绿 */
+  --color-primary: #2a5c4e;
+  --color-primary-light: #3a7564;
+  --color-primary-muted: rgba(42, 92, 78, 0.08);
+
+  /* 强调色：琥珀橙（能源感） */
+  --color-accent: #c45c26;
+  --color-accent-light: #e07840;
+  --color-accent-muted: rgba(196, 92, 38, 0.1);
+
+  --color-fast: #c45c26;
+  --color-slow: #3d6b8e;
+
+  --color-success: #3d7a5c;
+  --color-warning: #b8860b;
+  --color-danger: #b83a3a;
+  --color-info: #4a6fa5;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  --shadow-sm: 0 1px 3px rgba(28, 27, 25, 0.06);
+  --shadow-md: 0 4px 16px rgba(28, 27, 25, 0.08);
+  --shadow-lg: 0 8px 32px rgba(28, 27, 25, 0.1);
+
+  --font-sans: 'DM Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s ease;
+  --transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+
+  --header-height: 60px;
+  --sidebar-width: 220px;
+}

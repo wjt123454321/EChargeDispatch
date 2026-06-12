@@ -1,3 +1,8 @@
+<script setup>
+import AppToast from '@/components/ui/AppToast.vue'
+</script>
+
 <template>
-  <div id="app-root"></div>
+  <router-view />
+  <AppToast />
 </template>

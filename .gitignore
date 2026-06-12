@@ -8,6 +8,7 @@ dist/
 build/
 *.sqlite3
 backend/.env
+backend/acceptance_result.csv
 
 # Node
 frontend/node_modules/
