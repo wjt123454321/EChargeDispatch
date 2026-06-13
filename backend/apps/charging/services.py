@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -136,12 +137,42 @@ class QueueService:
 
 class DispatchService:
     @staticmethod
+    def _single_request_charge_time(request: ChargingRequest) -> Decimal:
+        return estimate_charge_hours(request.request_amount, request.request_mode)
+
+    @staticmethod
     def _available_piles(mode: str, config: SystemConfig):
         return ChargingPile.objects.filter(
             pile_type=mode,
             is_enabled=True,
             status__in={PileStatus.AVAILABLE, PileStatus.CHARGING},
         )
+
+    @staticmethod
+    def _available_batch_piles():
+        return ChargingPile.objects.filter(
+            is_enabled=True,
+            status__in={PileStatus.AVAILABLE, PileStatus.CHARGING},
+        ).order_by('id')
+
+    @staticmethod
+    def _batch_charging_area_capacity(config: SystemConfig) -> int:
+        return config.charging_queue_len * DispatchService._available_batch_piles().count()
+
+    @staticmethod
+    def _batch_total_capacity(config: SystemConfig) -> int:
+        return config.waiting_area_size + DispatchService._batch_charging_area_capacity(config)
+
+    @staticmethod
+    def _batch_in_progress() -> bool:
+        return ChargingRequest.objects.filter(
+            status__in={
+                RequestStatus.DISPATCHED,
+                RequestStatus.CHARGING,
+                RequestStatus.PENDING_RESCHEDULE,
+            },
+            current_pile__isnull=False,
+        ).exists()
 
     @staticmethod
     def _pile_queue_count(pile: ChargingPile):
@@ -182,12 +213,177 @@ class DispatchService:
         return candidates[0][1]
 
     @staticmethod
+    def _build_batch_min_total_plan(waiting, piles, config: SystemConfig):
+        """
+        严格批量调度：
+        - 仅在一批尚未开始、且站内车辆数达到总车位数时触发
+        - 忽略快慢模式与到达先后顺序
+        - 一次性从当前全部 waiting 中选出本批进入充电区的车辆
+        - 目标是最小化本批进入充电区车辆的总完成时长
+
+        在“无批次运行中”时，各桩基准等待时间均为 0，因此问题可化为：
+        - 从全部请求中选出 charging_area_capacity 辆
+        - 将更小的充电量分配给更高权重的槽位
+        """
+        if not waiting or not piles:
+            return []
+
+        slots = []
+        for pile in sorted(piles, key=lambda item: item.id):
+            remaining_slots = max(config.charging_queue_len - DispatchService._pile_queue_count(pile), 0)
+            for position in range(1, remaining_slots + 1):
+                weight = Decimal(str(remaining_slots - position + 1)) / Decimal(str(pile.rated_power))
+                slots.append({
+                    'pile': pile,
+                    'position': position,
+                    'weight': weight,
+                })
+
+        if not slots:
+            return []
+
+        selected_count = min(len(waiting), len(slots))
+        sorted_requests = sorted(
+            waiting,
+            key=lambda request: (request.request_amount, request.request_time, request.id),
+        )[:selected_count]
+        sorted_slots = sorted(
+            slots,
+            key=lambda item: (-item['weight'], item['pile'].id, item['position']),
+        )[:selected_count]
+
+        assignments = []
+        for request, slot in zip(sorted_requests, sorted_slots):
+            assignments.append((request, slot['pile'], slot['position']))
+
+        assignments.sort(key=lambda item: (item[1].id, item[2], item[0].id))
+        return [(request, pile) for request, pile, _ in assignments]
+
+    @staticmethod
+    def _build_single_min_total_plan(waiting, piles, config: SystemConfig):
+        """
+        在候选集合已经按 FIFO 选定后，对这批车做整体最优分配。
+
+        目标：
+        - 最小化本轮进入充电区车辆的完成时长总和
+        - 若总和相同，则优先让更早进入等候区的车辆获得更短完成时长
+        - 若仍相同，则按更小 pile.id / request.id 稳定打破平局
+        """
+        if not waiting or not piles:
+            return []
+
+        request_order = {request.id: index for index, request in enumerate(waiting)}
+        request_time = {request.id: DispatchService._single_request_charge_time(request) for request in waiting}
+        base_wait = {pile.id: DispatchService._estimate_pile_completion_time(pile) for pile in piles}
+        capacities = {
+            pile.id: max(config.charging_queue_len - DispatchService._pile_queue_count(pile), 0)
+            for pile in piles
+        }
+        available_pile_ids = [pile.id for pile in piles if capacities[pile.id] > 0]
+        if not available_pile_ids:
+            return []
+
+        assigned = {pile_id: [] for pile_id in available_pile_ids}
+        remaining = capacities.copy()
+        best_key = None
+        best_plan = None
+
+        def build_plan_snapshot():
+            total = Decimal('0')
+            completion_by_request = {}
+            position_by_request = {}
+            pile_plan = {}
+
+            for pile in sorted(piles, key=lambda item: item.id):
+                pile_id = pile.id
+                assigned_ids = assigned.get(pile_id, [])
+                if not assigned_ids:
+                    pile_plan[pile_id] = []
+                    continue
+
+                ordered_ids = sorted(
+                    assigned_ids,
+                    key=lambda request_id: (request_time[request_id], request_order[request_id], request_id),
+                )
+                current = base_wait[pile_id]
+                plan_items = []
+                for position, request_id in enumerate(ordered_ids, start=1):
+                    current += request_time[request_id]
+                    total += current
+                    completion_by_request[request_id] = current
+                    position_by_request[request_id] = (pile_id, position)
+                    plan_items.append(request_id)
+                pile_plan[pile_id] = plan_items
+
+            completion_vector = tuple(completion_by_request[request.id] for request in waiting)
+            position_vector = tuple(position_by_request[request.id] for request in waiting)
+            key = (total, completion_vector, position_vector)
+            return key, pile_plan
+
+        def optimistic_lower_bound(next_index: int):
+            lower_bound = Decimal('0')
+            for pile_id in available_pile_ids:
+                if assigned[pile_id]:
+                    ordered_ids = sorted(
+                        assigned[pile_id],
+                        key=lambda request_id: (request_time[request_id], request_order[request_id], request_id),
+                    )
+                    current = base_wait[pile_id]
+                    for request_id in ordered_ids:
+                        current += request_time[request_id]
+                        lower_bound += current
+
+            for request in waiting[next_index:]:
+                feasible_piles = [pile_id for pile_id in available_pile_ids if remaining[pile_id] > 0]
+                if not feasible_piles:
+                    break
+                lower_bound += min(base_wait[pile_id] for pile_id in feasible_piles) + request_time[request.id]
+            return lower_bound
+
+        def backtrack(index: int):
+            nonlocal best_key, best_plan
+            if index >= len(waiting):
+                key, pile_plan = build_plan_snapshot()
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_plan = pile_plan
+                return
+
+            lower_bound = optimistic_lower_bound(index)
+            if best_key is not None and lower_bound > best_key[0]:
+                return
+
+            request = waiting[index]
+            for pile_id in sorted(available_pile_ids):
+                if remaining[pile_id] <= 0:
+                    continue
+                assigned[pile_id].append(request.id)
+                remaining[pile_id] -= 1
+                backtrack(index + 1)
+                remaining[pile_id] += 1
+                assigned[pile_id].pop()
+
+        backtrack(0)
+        if not best_plan:
+            return []
+
+        request_map = {request.id: request for request in waiting}
+        pile_map = {pile.id: pile for pile in piles}
+        dispatch_sequence = []
+        for pile in sorted(piles, key=lambda item: item.id):
+            for request_id in best_plan.get(pile.id, []):
+                dispatch_sequence.append((request_map[request_id], pile_map[pile.id]))
+        return dispatch_sequence
+
+    @staticmethod
     def _dispatch_request_to_pile(request: ChargingRequest, pile: ChargingPile, config: SystemConfig):
         before = request.status
         position = DispatchService._pile_queue_count(pile) + 1
         request.status = RequestStatus.DISPATCHED
         request.current_pile = pile
-        request.queued_at = system_now()
+        # Preserve the planned queue order in persisted data so downstream reads
+        # (auto start / snapshots / reports) reflect the dispatch strategy result.
+        request.queued_at = system_now() + timedelta(microseconds=position)
         request.save(update_fields=['status', 'current_pile', 'queued_at'])
         QueueService.create_pile_ticket(request, pile, request.queue_num, position)
         VehicleService.sync_vehicle_status(request.vehicle, VehicleStatus.QUEUING, False)
@@ -204,14 +400,15 @@ class DispatchService:
     def try_dispatch_mode(config: SystemConfig, mode: str):
         if config.waiting_dispatch_paused:
             return
+        if config.dispatch_mode == DispatchMode.BATCH_MIN_TOTAL:
+            if mode != ChargeMode.FAST:
+                return
+            DispatchService._try_batch_dispatch(config)
+            return
         waiting = ChargingRequest.objects.filter(
             status=RequestStatus.QUEUING, request_mode=mode
         ).order_by('request_time', 'id')
         if not waiting.exists():
-            return
-
-        if config.dispatch_mode == DispatchMode.BATCH_MIN_TOTAL:
-            DispatchService._try_batch_dispatch(config)
             return
 
         if config.dispatch_mode == DispatchMode.SINGLE_MIN_TOTAL:
@@ -232,8 +429,8 @@ class DispatchService:
 
     @staticmethod
     def _try_single_min_total(config: SystemConfig, mode: str):
-        available_slots = 0
         piles = list(DispatchService._available_piles(mode, config))
+        available_slots = 0
         for pile in piles:
             available_slots += max(config.charging_queue_len - DispatchService._pile_queue_count(pile), 0)
         if available_slots <= 0:
@@ -242,41 +439,29 @@ class DispatchService:
             ChargingRequest.objects.filter(status=RequestStatus.QUEUING, request_mode=mode)
             .order_by('request_time', 'id')[:available_slots]
         )
-        for request in waiting:
-            pile = DispatchService._best_pile_for_request(request, config)
-            if pile:
-                DispatchService._dispatch_request_to_pile(request, pile, config)
+        dispatch_sequence = DispatchService._build_single_min_total_plan(waiting, piles, config)
+        for request, pile in dispatch_sequence:
+            DispatchService._dispatch_request_to_pile(request, pile, config)
 
     @staticmethod
     def _try_batch_dispatch(config: SystemConfig):
-        total_capacity = config.waiting_area_size + config.charging_queue_len * (
-            config.fast_pile_num + config.slow_pile_num
-        )
+        if DispatchService._batch_in_progress():
+            return
+        piles = list(DispatchService._available_batch_piles())
+        if not piles:
+            return
+        total_capacity = DispatchService._batch_total_capacity(config)
         active_count = ChargingRequest.objects.filter(status__in=RequestStatus.ACTIVE).count()
-        if active_count < total_capacity:
+        if active_count != total_capacity:
             return
         waiting = list(
             ChargingRequest.objects.filter(status=RequestStatus.QUEUING).order_by('request_time', 'id')
         )
-        piles = list(
-            ChargingPile.objects.filter(
-                is_enabled=True, status__in={PileStatus.AVAILABLE, PileStatus.CHARGING}
-            )
-        )
-        for request in waiting:
-            best_pile = None
-            best_score = None
-            for pile in piles:
-                if not DispatchService._pile_has_slot(pile, config):
-                    continue
-                score = DispatchService._estimate_pile_completion_time(pile) + estimate_charge_hours(
-                    request.request_amount, pile.pile_type
-                )
-                if best_score is None or score < best_score:
-                    best_score = score
-                    best_pile = pile
-            if best_pile:
-                DispatchService._dispatch_request_to_pile(request, best_pile, config)
+        if len(waiting) != active_count:
+            return
+        dispatch_sequence = DispatchService._build_batch_min_total_plan(waiting, piles, config)
+        for request, pile in dispatch_sequence:
+            DispatchService._dispatch_request_to_pile(request, pile, config)
 
     @staticmethod
     def try_dispatch_all():
@@ -329,7 +514,15 @@ class ChargingRequestService:
 
         config = StationConfigService.get_active_config()
         DispatchService.try_dispatch_all()
-        if QueueService.waiting_area_used() >= config.waiting_area_size:
+        if config.dispatch_mode == DispatchMode.BATCH_MIN_TOTAL:
+            active_count = ChargingRequest.objects.filter(status__in=RequestStatus.ACTIVE).count()
+            if active_count >= DispatchService._batch_total_capacity(config):
+                return {
+                    'accepted': False,
+                    'reason': 'station_full',
+                    'message': '站内已无空位',
+                }
+        elif QueueService.waiting_area_used() >= config.waiting_area_size:
             has_slot = any(
                 DispatchService._pile_has_slot(p, config)
                 for p in DispatchService._available_piles(request_mode, config)
