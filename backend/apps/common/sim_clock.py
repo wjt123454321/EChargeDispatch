@@ -64,3 +64,8 @@ def make_case_time(hour: int, minute: int) -> datetime:
     y, m, d = ACCEPTANCE_BASE_DATE
     dt = datetime(y, m, d, hour, minute, 0)
     return timezone.make_aware(dt)
+
+
+def sim_delta_to_real_seconds(sim_delta_seconds: float) -> float:
+    """模拟经过的秒数 → 真实等待秒数（比例尺 1:10）。"""
+    return sim_delta_seconds / TIME_SCALE

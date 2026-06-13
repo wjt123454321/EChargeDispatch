@@ -2,15 +2,14 @@
 按作业验收用例自动执行事件并输出填表快照。
 
 用法：
-  python manage.py run_acceptance              # 真实节奏：事件间隔 30 秒
-  python manage.py run_acceptance --fast       # 快速模式：不等待
+  python manage.py run_acceptance              # 1:10 倍速：事件间按模拟间隔真实等待
+  python manage.py run_acceptance --fast       # 快速模式：瞬间推进、不等待
   python manage.py run_acceptance --until 09:30 # 执行到指定时刻（默认 09:30）
   python manage.py run_acceptance --output result.csv
   python manage.py run_acceptance --snapshot-only  # 仅输出当前快照
 """
 
 import csv
-import time
 
 from django.core.management.base import BaseCommand
 
@@ -29,7 +28,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--interval', type=float, default=30.0,
-            help='真实事件间隔秒数（默认 30）',
+            help='已弃用：等待时间现按模拟间隔与 1:10 自动计算',
         )
         parser.add_argument(
             '--until', type=str, default='09:30',
@@ -71,12 +70,14 @@ class Command(BaseCommand):
             header = ['时刻', '事件', '快充1', '快充2', '慢充1', '慢充2', '慢充3', '等候区']
             self.stdout.write('\n' + '\t'.join(header))
 
-            for idx, (case_time, event) in enumerate(events):
-                if idx > 0 and not options['fast']:
-                    time.sleep(options['interval'])
-
+            for case_time, event in events:
                 event_str = self._format_event(event)
-                snap = AcceptanceService.run(case_time, event, event_str)
+                snap = AcceptanceService.run(
+                    case_time,
+                    event,
+                    event_str,
+                    realtime=not options['fast'],
+                )
                 if event[0] == 'A' and event[2] in ('F', 'T') and snap.get('request_rejected'):
                     self.stdout.write(self.style.WARNING(
                         f'  → {event[1]} 到达被拒：{snap["request_rejected"]}'

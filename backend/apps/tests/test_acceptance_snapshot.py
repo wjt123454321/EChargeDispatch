@@ -2,11 +2,19 @@
 验收快照：车辆可见性与三行子表格式。
 """
 
+from decimal import Decimal
+
 from django.test import TestCase
 
-from apps.common.sim_clock import disable, enable, make_case_time
+from apps.accounts.models import Vehicle
+from apps.charging.models import ChargingRequest
+from apps.charging.services import ChargingRequestService, QueueService
+from apps.common.enums import ChargeMode, RequestStatus
+from apps.common.sim_clock import disable, enable, make_case_time, system_now
+from apps.common.utils import generate_no
 from apps.operations.acceptance_events import ACCEPTANCE_EVENTS
 from apps.operations.acceptance_service import AcceptanceService
+from apps.station.services import StationConfigService
 
 
 class AcceptanceSnapshotTests(TestCase):
@@ -71,12 +79,56 @@ class AcceptanceSnapshotTests(TestCase):
             msg=f'恢复后 V24(T10) 应排在 V25(T11) 前，实际顺序 {slow_slots}',
         )
 
-    def test_submit_rejected_when_waiting_full(self):
-        from apps.accounts.models import Vehicle
-        from apps.charging.services import ChargingRequestService
-        from apps.common.sim_clock import enable, disable, make_case_time
-        from apps.operations.acceptance_service import AcceptanceService
+    def test_advance_time_accumulates_charge_across_interval(self):
+        enable(make_case_time(6, 0))
+        try:
+            AcceptanceService.reset_environment()
+            AcceptanceService.run('06:00', ('A', 'V1', 'T', 40), realtime=False)
+            AcceptanceService.advance_time_to(make_case_time(6, 5), realtime=False)
+            snap = AcceptanceService.build_snapshot('06:05')
+            charged = snap['piles']['T1']['charged_amount']
+            self.assertIsNotNone(charged)
+            self.assertAlmostEqual(charged, 0.83, delta=0.05)
+        finally:
+            disable()
 
+    def test_mid_interval_handoff_shows_charged_amount(self):
+        """区间内前车充满、后车接上后，快照应显示后车已充电量。"""
+        enable(make_case_time(6, 0))
+        try:
+            AcceptanceService.reset_environment()
+            AcceptanceService.run('06:00', ('A', 'V1', 'T', 0.5), realtime=False)
+            pile = ChargingRequest.objects.get(
+                vehicle__plate_no='V1',
+            ).current_pile
+            self.assertIsNotNone(pile)
+
+            v2 = Vehicle.objects.select_related('user').get(plate_no='V2')
+            config = StationConfigService.get_active_config()
+            queue_num = QueueService.next_queue_num(config, ChargeMode.SLOW)
+            v2_req = ChargingRequest.objects.create(
+                request_no=generate_no('REQ'),
+                user=v2.user,
+                vehicle=v2,
+                request_mode=ChargeMode.SLOW,
+                request_amount=Decimal('30'),
+                status=RequestStatus.DISPATCHED,
+                current_pile=pile,
+                queue_num=queue_num,
+                queued_at=system_now(),
+            )
+            QueueService.create_pile_ticket(v2_req, pile, queue_num, 1)
+
+            AcceptanceService.advance_time_to(make_case_time(6, 5), realtime=False)
+            snap = AcceptanceService.build_snapshot('06:05')
+            slot = snap['piles'][pile.pile_no]['slots'][0]
+            self.assertIn('V2', slot, msg=f'V2 应正在充电，实际 {slot}')
+            charged = float(slot.split(',')[1])
+            self.assertGreater(charged, 0.1, msg=f'V2 应有区间内充电量，实际 {slot}')
+        finally:
+            disable()
+
+    def test_submit_rejected_when_waiting_full(self):
         enable(make_case_time(6, 0))
         try:
             AcceptanceService.reset_environment()

@@ -2,12 +2,14 @@
 验收测试：环境重置、事件执行、状态快照。
 """
 
+import time
+from datetime import timedelta
 from decimal import Decimal
 
 from django.core.management import call_command
 from django.db import transaction
 
-from apps.accounts.models import Vehicle
+from apps.accounts.models import AdminAccount, Vehicle
 from apps.accounts.services import AuthService
 from apps.billing.models import Bill, ChargeDetail
 from apps.charging.models import ChargingRequest, ChargingSession, DispatchRecord, QueueTicket
@@ -26,13 +28,23 @@ from apps.common.enums import (
     VehicleStatus,
 )
 from apps.common.exceptions import AppException
-from apps.common.sim_clock import is_active, make_case_time, set_now, system_now
+from apps.common.sim_clock import (
+    is_active,
+    make_case_time,
+    set_now,
+    sim_delta_to_real_seconds,
+    system_now,
+)
 from apps.common.utils import calculate_cross_period_fee, compute_charged_amount
 from apps.operations.acceptance_events import ACCEPTANCE_EVENTS, DEFAULT_UNTIL, PILE_COLUMNS
 from apps.operations.models import FaultRecord
 from apps.operations.services import FaultService
 from apps.station.models import ChargingPile
 from apps.station.services import StationConfigService
+
+# 方案2：每模拟 1 分钟前进一步，网页轮询快照时可见电量上涨
+SIM_STEP = timedelta(minutes=1)
+MAX_ADVANCE_ITERATIONS = 10000
 
 
 class AcceptanceService:
@@ -79,6 +91,12 @@ class AcceptanceService:
         )
 
     @staticmethod
+    def _acceptance_admin_id():
+        """验收 B 类事件使用的管理员 ID（init_system 创建）。"""
+        admin = AdminAccount.objects.order_by('id').first()
+        return admin.id if admin else None
+
+    @staticmethod
     def _vehicle(car_id: str) -> Vehicle:
         vehicle = Vehicle.objects.filter(plate_no=car_id).select_related('user').first()
         if not vehicle:
@@ -93,6 +111,71 @@ class AcceptanceService:
         return pile
 
     @staticmethod
+    def _earliest_completion_between(current, limit):
+        """返回 (current, limit] 内最早的充满时刻；无则 None。"""
+        earliest = None
+        sessions = ChargingSession.objects.filter(
+            session_status=SessionStatus.ACTIVE,
+            end_time__isnull=True,
+        ).select_related('request', 'pile')
+        for session in sessions:
+            if session.request.status != RequestStatus.CHARGING:
+                continue
+            charged = compute_charged_amount(session, current)
+            need = session.request.request_amount - charged
+            if need <= 0:
+                continue
+            power = session.pile.rated_power
+            if not power or power <= 0:
+                continue
+            hours = Decimal(str(need)) / Decimal(str(power))
+            completion = current + timedelta(seconds=float(hours) * 3600)
+            if completion <= current or completion > limit:
+                continue
+            if earliest is None or completion < earliest:
+                earliest = completion
+        return earliest
+
+    @staticmethod
+    def advance_time_to(target_moment, realtime: bool = False):
+        """
+        将模拟时间推进到 target_moment（不早于当前时刻）。
+
+        方案1：在充满时刻精确跳转，区间内换车电量正确。
+        方案2：每模拟 1 分钟前进一步，HTTP 快照可看到电量上涨。
+        realtime=True 时按 1:10 真实等待；False 时瞬间推进（--fast）。
+        """
+        if not is_active() or not target_moment:
+            return
+
+        for _ in range(MAX_ADVANCE_ITERATIONS):
+            current = system_now()
+            if current >= target_moment:
+                return
+
+            candidates = [target_moment]
+            minute_tick = current + SIM_STEP
+            if minute_tick <= target_moment:
+                candidates.append(minute_tick)
+
+            completion = AcceptanceService._earliest_completion_between(current, target_moment)
+            if completion:
+                candidates.append(completion)
+
+            next_stop = min(c for c in candidates if c > current)
+
+            if realtime:
+                sim_seconds = (next_stop - current).total_seconds()
+                real_seconds = sim_delta_to_real_seconds(sim_seconds)
+                if real_seconds > 0:
+                    time.sleep(real_seconds)
+
+            set_now(next_stop)
+            AcceptanceService.stabilize_system()
+
+        raise RuntimeError('advance_time_to 超过最大迭代次数')
+
+    @staticmethod
     def auto_complete_full_charges():
         """已充满请求电量的会话自动结束，释放桩位。"""
         completed = []
@@ -104,7 +187,7 @@ class AcceptanceService:
             if session.request.status != RequestStatus.CHARGING:
                 continue
             charged = compute_charged_amount(session, system_now())
-            if charged >= session.request.request_amount:
+            if charged + Decimal('0.0001') >= session.request.request_amount:
                 try:
                     ChargingSessionService.end_charging(session.vehicle)
                     completed.append(session.vehicle.plate_no)
@@ -427,10 +510,11 @@ class AcceptanceService:
         elif kind == 'B':
             pile_no, action, flag = event[1], event[2], event[3]
             pile = AcceptanceService._pile(pile_no)
+            admin_id = AcceptanceService._acceptance_admin_id()
             if action == 'O' and flag == 0:
-                FaultService.report_fault(pile.id, admin_id=1)
+                FaultService.report_fault(pile.id, admin_id=admin_id)
             elif action == 'O' and flag == 1:
-                FaultService.recover_fault(pile.id, admin_id=1)
+                FaultService.recover_fault(pile.id, admin_id=admin_id)
             else:
                 raise ValueError(f'未知管理操作: {event}')
 
@@ -460,13 +544,13 @@ class AcceptanceService:
         return result
 
     @staticmethod
-    def run(case_time: str, event: tuple, event_desc: str = '') -> dict:
-        """跳转模拟时间、执行事件、返回快照。"""
+    def run(case_time: str, event: tuple, event_desc: str = '', realtime: bool = False) -> dict:
+        """推进模拟时间、执行事件、返回快照。"""
         moment = AcceptanceService.parse_case_time(case_time)
         if moment:
-            set_now(moment)
+            AcceptanceService.advance_time_to(moment, realtime=realtime)
 
-        # 时刻跳转后先推进充电完成与调度，再执行本条事件
+        # 到达事件时刻后先推进充电完成与调度，再执行本条事件
         AcceptanceService.stabilize_system()
         submit_result = AcceptanceService.execute_event(event)
         AcceptanceService.stabilize_system()
